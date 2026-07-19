@@ -1,6 +1,6 @@
 # Hakui
 
-Hakui is a mobile-first, offline-capable bookkeeping application for a Japan trip. It stores money as integer JPY, tracks Osaka, Kyoto, and Tokyo separately, scans Japanese receipts on a private NixOS host, and keeps pre-trip purchases outside the live budget gauges.
+Hakui is a mobile-first, offline-capable bookkeeping application for a Japan trip. It stores money as integer JPY, tracks Osaka, Kyoto, and Tokyo separately, scans Japanese receipts on a self-hosted NixOS host, and keeps pre-trip purchases outside the live budget gauges.
 
 ## Local development
 
@@ -25,7 +25,7 @@ nix flake check
 
 ## Configuration
 
-`config/hakui.json` is suitable for local development. For NixOS, start from `config/hakui.production.example.json` and set the exact HTTPS Tailscale origin. Keep production database, backup, and initial CSV paths under `/var/lib/hakui` so systemd hardening permits access.
+`config/hakui.json` is suitable for local development. `config/hakui.production.example.json` is configured for `https://hakui.kaitotlex.engineering`. Keep production database, backup, and initial CSV paths under `/var/lib/hakui` so systemd hardening permits access.
 
 Budget amounts and leg dates are set in the application Settings page, not in JSON.
 
@@ -43,11 +43,19 @@ Add this flake as an input and import its module:
       modules = [
         hakui.nixosModules.default
         ({ ... }: {
-          services.tailscale.enable = true;
           services.hakui = {
             enable = true;
             configFile = /etc/nixos/hakui.json;
-            tailscaleServe.enable = true;
+          };
+
+          services.nginx.virtualHosts."hakui.kaitotlex.engineering" = {
+            forceSSL = true;
+            enableACME = true;
+            locations."/" = {
+              proxyPass = "http://127.0.0.1:3000";
+              proxyWebsockets = true;
+            };
+            extraConfig = "client_max_body_size 15M;";
           };
         })
       ];
@@ -61,10 +69,10 @@ Rebuild NixOS, then inspect:
 ```sh
 systemctl status hakui
 curl http://127.0.0.1:3000/api/health
-tailscale serve status
+curl https://hakui.kaitotlex.engineering/api/health
 ```
 
-Do not open the application port in the firewall and do not enable Tailscale Funnel. Tailscale Serve supplies the HTTPS secure context required by phone camera and PWA features while keeping the site private to the tailnet.
+Keep port 3000 closed in the firewall. Nginx supplies the HTTPS secure context required by phone camera and PWA features. This deployment intentionally has no application authentication, so anyone who can reach the public hostname can view and modify its financial data.
 
 ## Offline behavior
 
