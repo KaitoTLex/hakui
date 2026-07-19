@@ -47,16 +47,6 @@ Add this flake as an input and import its module:
             enable = true;
             configFile = /etc/nixos/hakui.json;
           };
-
-          services.nginx.virtualHosts."hakui.kaitotlex.engineering" = {
-            forceSSL = true;
-            enableACME = true;
-            locations."/" = {
-              proxyPass = "http://127.0.0.1:3000";
-              proxyWebsockets = true;
-            };
-            extraConfig = "client_max_body_size 15M;";
-          };
         })
       ];
     };
@@ -64,15 +54,14 @@ Add this flake as an input and import its module:
 }
 ```
 
-Rebuild NixOS, then inspect:
+The module only runs the app; it listens on `127.0.0.1:3004` (or whatever `server.port` is set to in `configFile`) and does nothing else on the network. Rebuild NixOS, then inspect:
 
 ```sh
 systemctl status hakui
-curl http://127.0.0.1:3000/api/health
-curl https://hakui.kaitotlex.engineering/api/health
+curl http://127.0.0.1:3004/api/health
 ```
 
-Keep port 3000 closed in the firewall. Nginx supplies the HTTPS secure context required by phone camera and PWA features. This deployment intentionally has no application authentication, so anyone who can reach the public hostname can view and modify its financial data.
+Put your own reverse proxy (nginx, Caddy, Tailscale Serve, whatever you already run) in front of `127.0.0.1:3004` if you want it reachable off the box, and terminate TLS there however you normally do. This deployment intentionally has no application authentication, so anyone who can reach it can view and modify its financial data — keep it behind whatever access control your proxy provides.
 
 ## Offline behavior
 
