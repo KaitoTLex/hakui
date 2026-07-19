@@ -1,0 +1,17 @@
+{
+  "name": "Hakui Trip Bookkeeping",
+  "short_name": "Hakui",
+  "description": "Offline-first trip expense tracking",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fff8fb",
+  "theme_color": "#e84f89",
+  "icons": [
+    {
+      "src": "/hakui-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 3000,
+    "origin": "http://127.0.0.1:3000",
+    "bodySizeLimit": "15M"
+  },
+  "storage": {
+    "databasePath": "./data/hakui.sqlite",
+    "backupDirectory": "./data/backups",
+    "initialCsvPath": "./CurrentFinances.csv"
+  },
+  "trip": {
+    "timezone": "Asia/Tokyo",
+    "currency": "JPY"
+  },
+  "receipts": {
+    "maxUploadBytes": 12000000,
+    "maxPixels": 25000000,
+    "jpegMaxEdge": 1600,
+    "jpegQuality": 0.78
+  },
+  "ocr": {
+    "languages": ["jpn", "eng"],
+    "timeoutSeconds": 30,
+    "maxConcurrentJobs": 1,
+    "translationFallback": true
+  }
+}
