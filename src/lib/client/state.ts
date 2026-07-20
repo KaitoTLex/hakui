@@ -17,17 +17,26 @@ export const snapshot = writable<AppSnapshot | null>(null);
 export const syncState = writable<SyncState>('idle');
 export const pendingCount = writable(0);
 export const syncError = writable<string | null>(null);
+export const serviceAvailable = writable(true);
 
 let initialized = false;
 let syncPromise: Promise<void> | null = null;
 let syncRequested = false;
+let pollTimer: number | null = null;
 
-export async function initializeState(serverSnapshot: AppSnapshot): Promise<void> {
+class SyncRequestError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message);
+  }
+}
+
+export async function initializeState(serverSnapshot: AppSnapshot, backendAvailable = true): Promise<void> {
   if (initialized) return;
   initialized = true;
+  serviceAvailable.set(backendAvailable);
   const cached = await readCachedSnapshot();
   snapshot.set(cached ?? serverSnapshot);
-  if (!cached) await writeCachedSnapshot(serverSnapshot);
+  if (!cached && backendAvailable) await writeCachedSnapshot(serverSnapshot);
   await updatePendingCount();
   window.addEventListener('online', () => void syncNow());
   document.addEventListener('visibilitychange', () => {
@@ -105,7 +114,13 @@ async function request(item: Awaited<ReturnType<typeof getOutbox>>[number]): Pro
         signal: controller.signal
       });
     }
-    if (!response.ok) throw new Error((await response.text()) || `Sync failed with status ${response.status}.`);
+    if (!response.ok) {
+      if (response.status >= 500) serviceAvailable.set(false);
+      throw new SyncRequestError(
+        (await response.text()) || `Sync failed with status ${response.status}.`,
+        response.status >= 500 || response.status === 408 || response.status === 429
+      );
+    }
   } finally {
     window.clearTimeout(timeout);
   }
@@ -121,28 +136,52 @@ export function syncNow(): Promise<void> {
     syncError.set(null);
     try {
       const items = await getOutbox();
+      let terminalError: Error | null = null;
       for (const item of items) {
         try {
           await request(item);
           await completeOutbox(item);
         } catch (cause) {
           await markAttempt(item);
+          if (cause instanceof SyncRequestError && !cause.retryable) {
+            terminalError ??= cause;
+            continue;
+          }
           throw cause;
         }
       }
       await updatePendingCount();
       if ((await getOutbox()).length === 0) {
         const response = await fetch('/api/snapshot', { cache: 'no-store' });
-        if (!response.ok) throw new Error('Could not refresh server data.');
+        if (!response.ok) {
+          if (response.status >= 500) serviceAvailable.set(false);
+          throw new Error('Could not refresh server data.');
+        }
         const serverSnapshot = await response.json();
         if ((await getOutbox()).length === 0) await replaceSnapshot(serverSnapshot);
+        serviceAvailable.set(true);
+        if (serverSnapshot.transactions.some((transaction: Transaction) => transaction.status === 'pending_ocr')) {
+          if (pollTimer !== null) window.clearTimeout(pollTimer);
+          pollTimer = window.setTimeout(() => {
+            pollTimer = null;
+            void syncNow();
+          }, 5_000);
+        }
       }
+      if (terminalError) throw terminalError;
       syncState.set('idle');
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : 'Synchronization failed.';
       syncError.set(message);
       syncState.set(navigator.onLine ? 'error' : 'offline');
       await updatePendingCount();
+      const retryable = !(cause instanceof SyncRequestError) || cause.retryable;
+      if (navigator.onLine && retryable && pollTimer === null) {
+        pollTimer = window.setTimeout(() => {
+          pollTimer = null;
+          void syncNow();
+        }, 10_000);
+      }
     } finally {
       syncPromise = null;
       if (syncRequested) {

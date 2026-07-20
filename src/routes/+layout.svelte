@@ -1,12 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
-  import { initializeState, pendingCount, snapshot, syncState, syncNow } from '$lib/client/state';
+  import { initializeState, pendingCount, serviceAvailable, snapshot, syncState, syncNow } from '$lib/client/state';
   import '../app.css';
 
   export let data;
 
-  onMount(() => initializeState(data.snapshot));
+  let mounted = false;
+
+  onMount(() => {
+    mounted = true;
+    void initializeState(data.snapshot, data.backendAvailable);
+  });
 
   const nav = [
     { href: '/', label: 'Dashboard', mark: 'H' },
@@ -44,6 +49,9 @@
         {$syncState === 'syncing' ? 'Syncing' : $pendingCount ? `Sync ${$pendingCount}` : 'Synced'}
       </button>
     </header>
+    {#if mounted ? !$serviceAvailable : !data.backendAvailable}
+      <div class="service-warning" role="status">Server data is temporarily unavailable. Cached data and new changes remain on this device and will sync automatically.</div>
+    {/if}
     <slot />
   </main>
 

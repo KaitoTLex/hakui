@@ -5,24 +5,21 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
+    "dev:backend": "PYTHONPATH=backend python3 backend/run.py",
     "build": "vite build",
     "preview": "vite preview",
     "start": "node scripts/start.mjs",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run",
+    "test": "vitest run && npm run test:backend",
+    "test:backend": "PYTHONPATH=backend python3 -m unittest discover -s backend/tests",
     "test:watch": "vitest"
   },
   "dependencies": {
-    "better-sqlite3": "^12.11.1",
-    "csv-parse": "^7.0.1",
-    "csv-stringify": "^6.8.1",
-    "idb": "^8.0.3",
-    "zod": "^4.4.3"
+    "idb": "^8.0.3"
   },
   "devDependencies": {
     "@sveltejs/adapter-node": "^5.5.7",
     "@sveltejs/kit": "^2.70.1",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.10.0",
     "fake-indexeddb": "^6.2.5",
     "svelte": "^5.56.6",

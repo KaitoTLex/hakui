@@ -61,6 +61,7 @@ main { min-height: 100vh; padding-bottom: calc(5.4rem + env(safe-area-inset-bott
 .topbar { height: 4.5rem; padding: .75rem 1rem; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--canvas) 88%, transparent); backdrop-filter: blur(18px); position: sticky; top: 0; z-index: 20; }
 .topbar div { display: grid; }
 .topbar strong { font-size: 1.02rem; }
+.service-warning { margin: .75rem 1rem 0; padding: .7rem .85rem; border: 1px solid color-mix(in srgb, var(--danger) 25%, var(--line)); border-radius: .75rem; background: color-mix(in srgb, var(--danger) 8%, var(--surface)); color: var(--danger); font-size: .72rem; line-height: 1.45; }
 .eyebrow { font-size: .66rem; color: var(--pink-dark); text-transform: uppercase; font-weight: 800; letter-spacing: .13em; }
 .sync-button { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: .5rem .75rem; font-size: .75rem; font-weight: 750; box-shadow: var(--shadow-sm); }
 .sync-button:disabled { opacity: .65; }
@@ -122,5 +123,6 @@ textarea { min-height: 6rem; resize: vertical; }
   .status-dot.online { background: var(--aqua); }
   main { padding-bottom: 0; }
   .topbar { padding-inline: 2rem; }
+  .service-warning { margin-inline: 2rem; }
   .bottom-nav { display: none; }
 }

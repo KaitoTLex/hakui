@@ -2,8 +2,12 @@
   "server": {
     "host": "127.0.0.1",
     "port": 3004,
-    "origin": "https://hakui.kaitotlex.engineering",
+    "origin": "https://hakui.kaitotlex.systems",
     "bodySizeLimit": "15M"
+  },
+  "backend": {
+    "host": "127.0.0.1",
+    "port": 3005
   },
   "storage": {
     "databasePath": "/var/lib/hakui/hakui.sqlite",

@@ -1,4 +1,4 @@
 import type { LayoutServerLoad } from './$types';
-import { getSnapshot } from '$lib/server/database';
+import { loadSnapshot } from '$lib/server/backend';
 
-export const load: LayoutServerLoad = () => ({ snapshot: getSnapshot() });
+export const load: LayoutServerLoad = () => loadSnapshot();

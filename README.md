@@ -9,10 +9,11 @@ Requirements are provided by the flake:
 ```sh
 nix develop
 npm install
+npm run dev:backend
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. The development database is created at `data/hakui.sqlite`, and `CurrentFinances.csv` is imported automatically only when the database has no transactions.
+Run the two development commands in separate terminals, then open `http://127.0.0.1:5173`. The development database is created at `data/hakui.sqlite`, and `CurrentFinances.csv` is imported automatically only when the database has no transactions.
 
 Useful checks:
 
@@ -25,7 +26,7 @@ nix flake check
 
 ## Configuration
 
-`config/hakui.json` is suitable for local development. `config/hakui.production.example.json` is configured for `https://hakui.kaitotlex.engineering`. Keep production database, backup, and initial CSV paths under `/var/lib/hakui` so systemd hardening permits access.
+`config/hakui.json` is suitable for local development. `config/hakui.production.example.json` is configured for `https://hakui.kaitotlex.systems`. Keep production database, backup, and initial CSV paths under `/var/lib/hakui` so systemd hardening permits access.
 
 Budget amounts and leg dates are set in the application Settings page, not in JSON.
 
@@ -54,10 +55,11 @@ Add this flake as an input and import its module:
 }
 ```
 
-The module only runs the app; it listens on `127.0.0.1:3004` (or whatever `server.port` is set to in `configFile`) and does nothing else on the network. Rebuild NixOS, then inspect:
+The module runs an isolated Svelte frontend on `127.0.0.1:3004` and Python API on `127.0.0.1:3005` (or the ports configured in `configFile`). Only proxy the frontend port. Rebuild NixOS, then inspect:
 
 ```sh
 systemctl status hakui
+systemctl status hakui-api
 curl http://127.0.0.1:3004/api/health
 ```
 
@@ -71,4 +73,4 @@ Browser storage is not a backup. Daily SQLite backups are retained by the NixOS 
 
 ## Receipt processing
 
-The flake packages ImageMagick, Tesseract with `jpn+eng`, CTranslate2, SentencePiece, and a pinned Japanese-to-English model. OCR checks Japanese total labels first. Translation runs only as a fallback and never changes a numeric value. Every scanned transaction remains marked for review until it is opened and saved by the user.
+The Python service owns SQLite, CSV import, ImageMagick/Tesseract OCR, receipt parsing, and CTranslate2 translation. OCR work is persisted before processing and interrupted jobs return to the queue after a restart. Translation runs only as a fallback and never changes a numeric value. The Svelte service only renders and proxies the website; if Python is unavailable it serves the offline shell instead of failing the whole site.

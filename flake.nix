@@ -13,7 +13,13 @@
           lib = pkgs.lib;
           nodejs = pkgs.nodejs_24;
           tesseract = pkgs.tesseract5.override { enableLanguages = [ "eng" "jpn" ]; };
-          translationPython = pkgs.python3.withPackages (python: [ python.ctranslate2 python.sentencepiece ]);
+          backendPython = pkgs.python3.withPackages (python: [
+            python.fastapi
+            python.uvicorn
+            python.python-multipart
+            python.ctranslate2
+            python.sentencepiece
+          ]);
           argosArchive = pkgs.fetchurl {
             url = "https://argos-net.com/v1/translate-ja_en-1_1.argosmodel";
             hash = "sha256-Yj40d5WagV6wpe9T4JB5ro8fnTu80jBHO68owD+4MzU=";
@@ -33,21 +39,19 @@
           version = "0.1.0";
           src = source;
           inherit nodejs;
-          npmDepsHash = "sha256-kRyx/yIxupG3cyIlrhaB2N6O+2qYDQ08UTMcEP2TS4M=";
-          nativeBuildInputs = [ pkgs.makeWrapper pkgs.python3 pkgs.pkg-config ];
-          buildInputs = [ pkgs.sqlite ];
+          npmDepsHash = "sha256-IlYwH9w32dFRmxeOLBi4BxHSrFKtxh3nNBvOowMPrlA=";
+          nativeBuildInputs = [ pkgs.makeWrapper ];
           npmBuildScript = "build";
           installPhase = ''
             runHook preInstall
             npm prune --omit=dev
             mkdir -p $out/share/hakui $out/bin
-            cp -r build node_modules package.json scripts config CurrentFinances.csv $out/share/hakui/
+            cp -r build node_modules package.json scripts config backend CurrentFinances.csv $out/share/hakui/
             makeWrapper ${nodejs}/bin/node $out/bin/hakui \
-              --add-flags "$out/share/hakui/scripts/start.mjs" \
+              --add-flags "$out/share/hakui/scripts/start.mjs"
+            makeWrapper ${backendPython}/bin/python3 $out/bin/hakui-api \
+              --add-flags "$out/share/hakui/backend/run.py" \
               --prefix PATH : ${lib.makeBinPath [ pkgs.imagemagick tesseract ]} \
-              --set HAKUI_TRANSLATE_COMMAND "$out/bin/hakui-translate"
-            makeWrapper ${translationPython}/bin/python3 $out/bin/hakui-translate \
-              --add-flags "$out/share/hakui/scripts/translate.py" \
               --set HAKUI_TRANSLATION_MODEL "${argosModel}/packages/ja_en"
             runHook postInstall
           '';
@@ -77,9 +81,23 @@
         let
           pkgs = mkPkgs system;
           tesseract = pkgs.tesseract5.override { enableLanguages = [ "eng" "jpn" ]; };
+          backendPython = pkgs.python3.withPackages (python: [
+            python.fastapi
+            python.httpx
+            python.uvicorn
+            python.python-multipart
+            python.ctranslate2
+            python.sentencepiece
+          ]);
         in {
           default = pkgs.mkShell {
-            packages = [ pkgs.nodejs_24 pkgs.sqlite pkgs.imagemagick tesseract pkgs.python3Packages.ctranslate2 pkgs.python3Packages.sentencepiece ];
+            packages = [
+              pkgs.nodejs_24
+              pkgs.sqlite
+              pkgs.imagemagick
+              tesseract
+              backendPython
+            ];
             shellHook = ''
               export HAKUI_CONFIG="$PWD/config/hakui.json"
             '';

@@ -9,6 +9,7 @@ process.env.HOST = config.server.host;
 process.env.PORT = String(config.server.port);
 process.env.ORIGIN = config.server.origin;
 process.env.BODY_SIZE_LIMIT = config.server.bodySizeLimit;
+process.env.HAKUI_API_URL ??= `http://${config.backend?.host ?? '127.0.0.1'}:${config.backend?.port ?? config.server.port + 1}`;
 process.env.NODE_ENV = 'production';
 
 await import('../build/index.js');

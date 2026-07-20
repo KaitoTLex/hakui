@@ -5,6 +5,10 @@
     "origin": "http://127.0.0.1:3004",
     "bodySizeLimit": "15M"
   },
+  "backend": {
+    "host": "127.0.0.1",
+    "port": 3005
+  },
   "storage": {
     "databasePath": "./data/hakui.sqlite",
     "backupDirectory": "./data/backups",
