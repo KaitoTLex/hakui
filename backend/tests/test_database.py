@@ -104,6 +104,8 @@ class DatabaseTests(unittest.TestCase):
         transaction_id = str(uuid.uuid4())
         receipt_id = str(uuid.uuid4())
         self.database.update_settings({
+            "operationId": str(uuid.uuid4()),
+            "expectedRevision": 0,
             "overallBudgetYen": 750_000,
             "currentLegId": snapshot["legs"][1]["id"],
             "legs": [{
@@ -122,8 +124,30 @@ class DatabaseTests(unittest.TestCase):
         reopened = self.database.snapshot()
         receipt = self.database.get_receipt(receipt_id, include_image=True)
         self.assertEqual(reopened["trip"]["overallBudgetYen"], 750_000)
+        self.assertEqual(reopened["trip"]["settingsRevision"], 1)
         self.assertEqual(reopened["currentLegId"], snapshot["legs"][1]["id"])
         self.assertEqual(receipt["image"], b"persisted image")
+
+    def test_settings_reject_stale_writes_and_replay_idempotently(self) -> None:
+        snapshot = self.database.snapshot()
+        operation_id = str(uuid.uuid4())
+        update = {
+            "operationId": operation_id,
+            "expectedRevision": snapshot["trip"]["settingsRevision"],
+            "overallBudgetYen": 123_456,
+            "currentLegId": snapshot["legs"][0]["id"],
+            "legs": [{
+                "id": leg["id"], "budgetYen": 10_000, "startsOn": None, "endsOn": None,
+            } for leg in snapshot["legs"]],
+        }
+        committed = self.database.update_settings(update)
+        replayed = self.database.update_settings(update)
+        self.assertEqual(committed["trip"]["settingsRevision"], 1)
+        self.assertEqual(replayed["trip"]["settingsRevision"], 1)
+
+        with self.assertRaisesRegex(Exception, "changed on another device"):
+            self.database.update_settings({**update, "operationId": str(uuid.uuid4()), "overallBudgetYen": 999_999})
+        self.assertEqual(self.database.snapshot()["trip"]["overallBudgetYen"], 123_456)
 
 
 if __name__ == "__main__":

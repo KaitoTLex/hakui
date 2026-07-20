@@ -11,6 +11,7 @@ export interface Trip {
   startsOn: string | null;
   endsOn: string | null;
   active: boolean;
+  settingsRevision: number;
 }
 
 export interface Leg {
@@ -95,6 +96,8 @@ export interface TransactionInput {
 }
 
 export interface SettingsInput {
+  operationId: string;
+  expectedRevision: number;
   overallBudgetYen: number;
   currentLegId: string | null;
   legs: Array<{

@@ -4,27 +4,37 @@
 
   export let data;
 
-  let initialized = false;
   let overallBudgetYen = 0;
   let currentLegId = '';
   let legs: Array<{ id: string; name: string; budgetYen: number; startsOn: string; endsOn: string }> = [];
   let saving = false;
   let message = '';
   let failed = false;
+  let dirty = false;
+  let loadedSignature = '';
+  let loadedRevision = 0;
 
   $: current = $snapshot ?? data.snapshot;
-  $: if (!initialized && $stateReady && current) {
-    initialized = true;
+  $: settingsSignature = JSON.stringify([
+    current.trip.settingsRevision,
+    current.trip.overallBudgetYen,
+    current.currentLegId,
+    current.legs.map((leg) => [leg.id, leg.budgetYen, leg.startsOn, leg.endsOn])
+  ]);
+  $: if ($stateReady && !dirty && settingsSignature !== loadedSignature) {
     overallBudgetYen = current.trip.overallBudgetYen;
     currentLegId = current.currentLegId ?? '';
     legs = current.legs.map((leg) => ({ id: leg.id, name: leg.name, budgetYen: leg.budgetYen, startsOn: leg.startsOn ?? '', endsOn: leg.endsOn ?? '' }));
+    loadedRevision = current.trip.settingsRevision;
+    loadedSignature = settingsSignature;
   }
   $: prepaid = current.transactions.filter((item) => item.purchaseTiming === 'pre_trip').reduce((sum, item) => sum + item.amountYen, 0);
 
   async function save(): Promise<void> {
     saving = true; message = ''; failed = false;
     try {
-      await saveLocalSettings({
+      const outcome = await saveLocalSettings({
+        expectedRevision: loadedRevision,
         overallBudgetYen: Number(overallBudgetYen),
         currentLegId: currentLegId || null,
         legs: legs.map((leg) => ({
@@ -34,7 +44,8 @@
           endsOn: leg.endsOn || null
         }))
       });
-      message = navigator.onLine ? 'Trip settings saved and synchronized.' : 'Trip settings saved on this device and queued for synchronization.';
+      dirty = false;
+      message = outcome === 'synced' ? 'Trip settings saved and synchronized.' : 'Trip settings saved on this device and queued for synchronization.';
     } catch (cause) {
       failed = true; message = cause instanceof Error ? cause.message : 'Settings could not be saved.';
     } finally { saving = false; }
@@ -46,14 +57,14 @@
   <form class="settings-form" onsubmit={(event) => { event.preventDefault(); void save(); }}>
     <section class="card settings-section">
       <div class="section-copy"><h2>Overall budget</h2><p>The amount available for spending during the trip. Pre-trip purchases do not reduce this.</p></div>
-      <div class="field"><label for="overall">Overall budget in yen</label><input id="overall" type="number" min="0" step="1" bind:value={overallBudgetYen} /></div>
-      <div class="field"><label for="current-leg">Current leg</label><select id="current-leg" bind:value={currentLegId}>{#each legs as leg}<option value={leg.id}>{leg.name}</option>{/each}</select></div>
+      <div class="field"><label for="overall">Overall budget in yen</label><input id="overall" type="number" min="0" step="1" bind:value={overallBudgetYen} oninput={() => dirty = true} disabled={!$stateReady || saving} /></div>
+      <div class="field"><label for="current-leg">Current leg</label><select id="current-leg" bind:value={currentLegId} onchange={() => dirty = true} disabled={!$stateReady || saving}>{#each legs as leg}<option value={leg.id}>{leg.name}</option>{/each}</select></div>
     </section>
 
     <section class="card settings-section legs-section">
       <div class="section-copy"><h2>Trip legs</h2><p>Dates are optional. The current leg selector always takes precedence.</p></div>
       {#each legs as leg, index}
-        <fieldset><legend><span>{index + 1}</span>{leg.name}</legend><div class="form-grid leg-grid"><div class="field"><label for={`budget-${leg.id}`}>Budget in yen</label><input id={`budget-${leg.id}`} type="number" min="0" step="1" bind:value={leg.budgetYen} /></div><div class="field"><label for={`start-${leg.id}`}>Start date</label><input id={`start-${leg.id}`} type="date" bind:value={leg.startsOn} /></div><div class="field"><label for={`end-${leg.id}`}>End date</label><input id={`end-${leg.id}`} type="date" bind:value={leg.endsOn} /></div></div></fieldset>
+        <fieldset disabled={saving}><legend><span>{index + 1}</span>{leg.name}</legend><div class="form-grid leg-grid"><div class="field"><label for={`budget-${leg.id}`}>Budget in yen</label><input id={`budget-${leg.id}`} type="number" min="0" step="1" bind:value={leg.budgetYen} oninput={() => dirty = true} /></div><div class="field"><label for={`start-${leg.id}`}>Start date</label><input id={`start-${leg.id}`} type="date" bind:value={leg.startsOn} onchange={() => dirty = true} /></div><div class="field"><label for={`end-${leg.id}`}>End date</label><input id={`end-${leg.id}`} type="date" bind:value={leg.endsOn} onchange={() => dirty = true} /></div></div></fieldset>
       {/each}
     </section>
 
@@ -63,7 +74,7 @@
     </section>
 
     {#if message}<div class:error={failed} class="message">{message}</div>{/if}
-    <button class="button save" type="submit" disabled={saving}>{saving ? 'Saving' : 'Save trip settings'}</button>
+    <button class="button save" type="submit" disabled={saving || !$stateReady}>{saving ? 'Saving' : !$stateReady ? 'Loading settings' : 'Save trip settings'}</button>
   </form>
 </div>
 

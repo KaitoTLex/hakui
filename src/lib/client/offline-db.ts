@@ -84,15 +84,18 @@ export async function queueDelete(id: string, revision: number): Promise<void> {
   await transaction.done;
 }
 
-export async function queueSettings(settings: SettingsInput): Promise<void> {
-  await (await getDatabase()).put('outbox', {
+export async function queueSettings(settings: Omit<SettingsInput, 'operationId'>): Promise<OutboxItem> {
+  const operationId = crypto.randomUUID();
+  const item: OutboxItem = {
     id: 'settings',
-    operationId: crypto.randomUUID(),
+    operationId,
     kind: 'settings',
-    settings,
+    settings: { ...settings, operationId },
     attempts: 0,
     updatedAt: new Date().toISOString()
-  }, 'settings');
+  };
+  await (await getDatabase()).put('outbox', item, 'settings');
+  return item;
 }
 
 export async function getOutbox(): Promise<OutboxItem[]> {

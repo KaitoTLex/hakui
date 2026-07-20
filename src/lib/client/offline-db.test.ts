@@ -48,13 +48,23 @@ describe('offline outbox safety', () => {
   });
 
   it('persists settings in the outbox for offline synchronization', async () => {
-    await queueSettings({
+    const first = await queueSettings({
+      expectedRevision: 0,
       overallBudgetYen: 500_000,
       currentLegId: null,
       legs: []
     });
+    const second = await queueSettings({
+      expectedRevision: 0,
+      overallBudgetYen: 600_000,
+      currentLegId: null,
+      legs: []
+    });
+    await completeOutbox(first);
     const settings = (await getOutbox()).find((item) => item.kind === 'settings');
-    expect(settings?.settings?.overallBudgetYen).toBe(500_000);
+    expect(second.operationId).not.toBe(first.operationId);
+    expect(settings?.operationId).toBe(second.operationId);
+    expect(settings?.settings?.overallBudgetYen).toBe(600_000);
     expect(settings?.attempts).toBe(0);
   });
 });

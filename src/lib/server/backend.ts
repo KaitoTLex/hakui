@@ -10,7 +10,8 @@ export const unavailableSnapshot: AppSnapshot = {
     overallBudgetYen: 0,
     startsOn: null,
     endsOn: null,
-    active: true
+    active: true,
+    settingsRevision: 0
   },
   legs: [],
   categories: [],

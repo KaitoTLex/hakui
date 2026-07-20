@@ -73,6 +73,8 @@ class Database:
                   ends_on TEXT,
                   active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
                   current_leg_id TEXT,
+                  settings_revision INTEGER NOT NULL DEFAULT 0,
+                  last_settings_operation_id TEXT,
                   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
@@ -155,6 +157,11 @@ class Database:
                          SELECT revision FROM transactions WHERE transactions.id = receipts.transaction_id
                        ) WHERE ocr_state IN ('queued', 'processing')"""
                 )
+            trip_columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(trips)")}
+            if "settings_revision" not in trip_columns:
+                self.connection.execute("ALTER TABLE trips ADD COLUMN settings_revision INTEGER NOT NULL DEFAULT 0")
+            if "last_settings_operation_id" not in trip_columns:
+                self.connection.execute("ALTER TABLE trips ADD COLUMN last_settings_operation_id TEXT")
 
     def _seed(self) -> None:
         with self.lock, self.connection:
@@ -196,6 +203,7 @@ class Database:
             "id": row["id"], "name": row["name"], "currency": "JPY",
             "overallBudgetYen": row["overall_budget_yen"], "startsOn": row["starts_on"],
             "endsOn": row["ends_on"], "active": bool(row["active"]),
+            "settingsRevision": row["settings_revision"],
         }
 
     @staticmethod
@@ -324,17 +332,24 @@ class Database:
 
     def update_settings(self, data: dict[str, Any]) -> dict[str, Any]:
         with self.lock, self.connection:
-            trip = self.connection.execute("SELECT id FROM trips WHERE active = 1 LIMIT 1").fetchone()
+            trip = self.connection.execute(
+                "SELECT id, settings_revision, last_settings_operation_id FROM trips WHERE active = 1 LIMIT 1"
+            ).fetchone()
             if trip is None:
                 raise RuntimeError("No active trip exists")
+            if trip["last_settings_operation_id"] == data["operationId"]:
+                return self.snapshot()
+            if trip["settings_revision"] != data["expectedRevision"]:
+                raise ConflictError("Trip settings changed on another device. Reload them before saving again.")
             valid_legs = {row["id"] for row in self.connection.execute("SELECT id FROM legs WHERE trip_id = ?", (trip["id"],))}
             if data["currentLegId"] is not None and data["currentLegId"] not in valid_legs:
                 raise ValueError("Current leg does not belong to the active trip.")
             if {leg["id"] for leg in data["legs"]} - valid_legs:
                 raise ValueError("One or more legs do not belong to the active trip.")
             self.connection.execute(
-                "UPDATE trips SET overall_budget_yen = ?, current_leg_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (data["overallBudgetYen"], data["currentLegId"], trip["id"]),
+                """UPDATE trips SET overall_budget_yen = ?, current_leg_id = ?, settings_revision = settings_revision + 1,
+                   last_settings_operation_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND settings_revision = ?""",
+                (data["overallBudgetYen"], data["currentLegId"], data["operationId"], trip["id"], data["expectedRevision"]),
             )
             for leg in data["legs"]:
                 self.connection.execute(

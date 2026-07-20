@@ -23,8 +23,10 @@ export const stateReady = writable(false);
 
 let initialized = false;
 let syncPromise: Promise<void> | null = null;
+let settingsSyncPromise: Promise<void> | null = null;
 let syncRequested = false;
 let pollTimer: number | null = null;
+let snapshotVersion = 0;
 
 class SyncRequestError extends Error {
   constructor(message: string, readonly retryable: boolean) {
@@ -36,11 +38,20 @@ export async function initializeState(serverSnapshot: AppSnapshot, backendAvaila
   if (initialized) return;
   initialized = true;
   serviceAvailable.set(backendAvailable);
-  const cached = await readCachedSnapshot();
-  snapshot.set(cached ?? serverSnapshot);
-  if (!cached && backendAvailable) await writeCachedSnapshot(serverSnapshot);
-  stateReady.set(true);
-  await updatePendingCount();
+  try {
+    const [cached, pending] = await Promise.all([readCachedSnapshot(), getOutbox()]);
+    const baseline = backendAvailable ? serverSnapshot : cached ?? serverSnapshot;
+    snapshot.set(mergePendingChanges(baseline, pending, cached));
+    snapshotVersion += 1;
+    await writeCachedSnapshot(get(snapshot) ?? baseline);
+    await updatePendingCount();
+  } catch (cause) {
+    console.error('Offline storage could not be initialized; using server data.', cause);
+    snapshot.set(serverSnapshot);
+    snapshotVersion += 1;
+  } finally {
+    stateReady.set(true);
+  }
   window.addEventListener('online', () => void syncNow());
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') void syncNow();
@@ -50,6 +61,7 @@ export async function initializeState(serverSnapshot: AppSnapshot, backendAvaila
 
 export async function replaceSnapshot(value: AppSnapshot): Promise<void> {
   snapshot.set(value);
+  snapshotVersion += 1;
   await writeCachedSnapshot(value);
 }
 
@@ -82,9 +94,10 @@ export async function saveLocalTransaction(input: TransactionInput, receipt?: Bl
   await syncItem(input.id);
 }
 
-export async function saveLocalSettings(input: SettingsInput): Promise<void> {
+export async function saveLocalSettings(input: Omit<SettingsInput, 'operationId'>): Promise<'synced' | 'queued'> {
   if (!get(snapshot)) throw new Error('Application data is not ready.');
-  await queueSettings(input);
+  validateSettings(input);
+  const operation = await queueSettings(input);
   const current = get(snapshot);
   if (!current) throw new Error('Application data is not ready.');
   const legs = new Map(input.legs.map((leg) => [leg.id, leg]));
@@ -98,7 +111,46 @@ export async function saveLocalSettings(input: SettingsInput): Promise<void> {
     })
   });
   await updatePendingCount();
-  await syncItem('settings');
+  if (navigator.storage?.persist) void navigator.storage.persist();
+  if (!navigator.onLine) return 'queued';
+  try {
+    await flushSettings();
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : 'Settings synchronization failed.';
+    syncError.set(message);
+    syncState.set(navigator.onLine ? 'error' : 'offline');
+    const retryable = !(cause instanceof SyncRequestError) || cause.retryable;
+    if (retryable) scheduleRetry();
+    return 'queued';
+  }
+  let pending = (await getOutbox()).find((item) => item.id === 'settings');
+  if (pending?.operationId === operation.operationId) {
+    await flushSettings();
+    pending = (await getOutbox()).find((item) => item.id === 'settings');
+  }
+  if (pending?.operationId === operation.operationId) {
+    return 'queued';
+  }
+  syncError.set(null);
+  syncState.set('idle');
+  return 'synced';
+}
+
+function validateSettings(input: Omit<SettingsInput, 'operationId'>): void {
+  if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) {
+    throw new Error('Settings are not ready yet. Reload and try again.');
+  }
+  if (!Number.isSafeInteger(input.overallBudgetYen) || input.overallBudgetYen < 0 || input.overallBudgetYen > 1_000_000_000) {
+    throw new Error('Overall budget must be a whole number between 0 and 1,000,000,000 yen.');
+  }
+  for (const leg of input.legs) {
+    if (!Number.isSafeInteger(leg.budgetYen) || leg.budgetYen < 0 || leg.budgetYen > 1_000_000_000) {
+      throw new Error('Every leg budget must be a whole number between 0 and 1,000,000,000 yen.');
+    }
+    if (leg.startsOn && leg.endsOn && leg.startsOn > leg.endsOn) {
+      throw new Error('A leg end date cannot be before its start date.');
+    }
+  }
 }
 
 async function syncItem(id: string): Promise<void> {
@@ -133,14 +185,7 @@ async function request(item: Awaited<ReturnType<typeof getOutbox>>[number]): Pro
   const timeout = window.setTimeout(() => controller.abort(), 30_000);
   try {
     let response: Response;
-    if (item.kind === 'settings' && item.settings) {
-      response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(item.settings),
-        signal: controller.signal
-      });
-    } else if (item.kind === 'delete') {
+    if (item.kind === 'delete') {
       response = await fetch(`/api/transactions/${item.id}`, {
         method: 'DELETE',
         headers: { 'x-hakui-revision': String(item.revision ?? 0) },
@@ -173,6 +218,54 @@ async function request(item: Awaited<ReturnType<typeof getOutbox>>[number]): Pro
   }
 }
 
+async function flushSettings(): Promise<void> {
+  if (settingsSyncPromise) return settingsSyncPromise;
+  settingsSyncPromise = (async () => {
+    while (true) {
+      const item = (await getOutbox()).find((candidate) => candidate.kind === 'settings');
+      if (!item?.settings) return;
+      const settings = {
+        ...item.settings,
+        operationId: item.settings.operationId ?? item.operationId,
+        expectedRevision: item.settings.expectedRevision ?? get(snapshot)?.trip.settingsRevision ?? 0
+      };
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 30_000);
+      try {
+        const response = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(settings),
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          if (response.status >= 500) serviceAvailable.set(false);
+          throw new SyncRequestError(
+            (await responseMessage(response)) || `Settings sync failed with status ${response.status}.`,
+            response.status >= 500 || response.status === 408 || response.status === 429
+          );
+        }
+        const committed: AppSnapshot = await response.json();
+        await completeOutbox(item);
+        const newer = (await getOutbox()).filter((candidate) => candidate.kind === 'settings');
+        await replaceSnapshot(mergePendingChanges(committed, newer));
+        serviceAvailable.set(true);
+        await updatePendingCount();
+      } catch (cause) {
+        await markAttempt(item);
+        const replacement = (await getOutbox()).find((candidate) => candidate.kind === 'settings');
+        if (replacement && replacement.operationId !== item.operationId) continue;
+        throw cause;
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    }
+  })().finally(() => {
+    settingsSyncPromise = null;
+  });
+  return settingsSyncPromise;
+}
+
 async function responseMessage(response: Response): Promise<string> {
   const text = await response.text();
   try {
@@ -194,8 +287,14 @@ export function syncNow(): Promise<void> {
     syncState.set('syncing');
     syncError.set(null);
     try {
-      const items = await getOutbox();
       let terminalError: Error | null = null;
+      try {
+        await flushSettings();
+      } catch (cause) {
+        if (cause instanceof SyncRequestError && !cause.retryable) terminalError = cause;
+        else throw cause;
+      }
+      const items = (await getOutbox()).filter((item) => item.kind !== 'settings');
       for (const item of items) {
         try {
           await request(item);
@@ -209,16 +308,18 @@ export function syncNow(): Promise<void> {
           throw cause;
         }
       }
-      const remaining = await getOutbox();
       await updatePendingCount();
+      const versionBeforeRefresh = snapshotVersion;
       const response = await fetch('/api/snapshot', { cache: 'no-store' });
       if (!response.ok) {
         if (response.status >= 500) serviceAvailable.set(false);
         throw new Error('Could not refresh server data.');
       }
       const serverSnapshot: AppSnapshot = await response.json();
+      const remaining = await getOutbox();
       const mergedSnapshot = mergePendingChanges(serverSnapshot, remaining);
-      await replaceSnapshot(mergedSnapshot);
+      if (snapshotVersion === versionBeforeRefresh) await replaceSnapshot(mergedSnapshot);
+      else syncRequested = true;
       serviceAvailable.set(true);
       if (serverSnapshot.transactions.some((transaction: Transaction) => transaction.status === 'pending_ocr')) {
         if (pollTimer !== null) window.clearTimeout(pollTimer);
@@ -236,10 +337,7 @@ export function syncNow(): Promise<void> {
       await updatePendingCount();
       const retryable = !(cause instanceof SyncRequestError) || cause.retryable;
       if (navigator.onLine && retryable && pollTimer === null) {
-        pollTimer = window.setTimeout(() => {
-          pollTimer = null;
-          void syncNow();
-        }, 10_000);
+        scheduleRetry();
       }
     } finally {
       syncPromise = null;
@@ -252,8 +350,20 @@ export function syncNow(): Promise<void> {
   return syncPromise;
 }
 
-function mergePendingChanges(serverSnapshot: AppSnapshot, items: Awaited<ReturnType<typeof getOutbox>>): AppSnapshot {
-  const local = get(snapshot);
+function scheduleRetry(): void {
+  if (pollTimer !== null) return;
+  pollTimer = window.setTimeout(() => {
+    pollTimer = null;
+    void syncNow();
+  }, 10_000);
+}
+
+function mergePendingChanges(
+  serverSnapshot: AppSnapshot,
+  items: Awaited<ReturnType<typeof getOutbox>>,
+  localSnapshot: AppSnapshot | null | undefined = get(snapshot)
+): AppSnapshot {
+  const local = localSnapshot;
   let merged = serverSnapshot;
   for (const item of items) {
     if (item.kind === 'settings' && item.settings) {

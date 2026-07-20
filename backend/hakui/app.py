@@ -61,6 +61,8 @@ class LegSettings(BaseModel):
 class SettingsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    operationId: UUID
+    expectedRevision: int = Field(ge=0)
     overallBudgetYen: int = Field(ge=0, le=1_000_000_000)
     currentLegId: UUID | None
     legs: list[LegSettings]
@@ -150,6 +152,8 @@ def delete_transaction(transaction_id: UUID, x_hakui_revision: Annotated[int, He
 def put_settings(settings: SettingsInput) -> dict[str, Any]:
     try:
         return db().update_settings(model_data(settings))
+    except ConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
