@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { snapshot, replaceSnapshot } from '$lib/client/state';
+  import { saveLocalSettings, snapshot, stateReady } from '$lib/client/state';
   import { formatYen } from '$lib/format';
 
   export let data;
@@ -13,7 +13,7 @@
   let failed = false;
 
   $: current = $snapshot ?? data.snapshot;
-  $: if (!initialized && current) {
+  $: if (!initialized && $stateReady && current) {
     initialized = true;
     overallBudgetYen = current.trip.overallBudgetYen;
     currentLegId = current.currentLegId ?? '';
@@ -24,13 +24,17 @@
   async function save(): Promise<void> {
     saving = true; message = ''; failed = false;
     try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ overallBudgetYen: Number(overallBudgetYen), currentLegId: currentLegId || null, legs: legs.map((leg) => ({ id: leg.id, budgetYen: Number(leg.budgetYen), startsOn: leg.startsOn || null, endsOn: leg.endsOn || null })) })
+      await saveLocalSettings({
+        overallBudgetYen: Number(overallBudgetYen),
+        currentLegId: currentLegId || null,
+        legs: legs.map((leg) => ({
+          id: leg.id,
+          budgetYen: Number(leg.budgetYen),
+          startsOn: leg.startsOn || null,
+          endsOn: leg.endsOn || null
+        }))
       });
-      if (!response.ok) throw new Error((await response.text()) || 'Settings could not be saved.');
-      await replaceSnapshot(await response.json());
-      message = 'Trip settings saved.';
+      message = navigator.onLine ? 'Trip settings saved and synchronized.' : 'Trip settings saved on this device and queued for synchronization.';
     } catch (cause) {
       failed = true; message = cause instanceof Error ? cause.message : 'Settings could not be saved.';
     } finally { saving = false; }

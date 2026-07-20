@@ -1,11 +1,12 @@
 import { get, writable } from 'svelte/store';
-import type { AppSnapshot, Transaction, TransactionInput } from '$lib/types';
+import type { AppSnapshot, SettingsInput, Transaction, TransactionInput } from '$lib/types';
 import {
   completeOutbox,
   getOutbox,
   getReceipt,
   markAttempt,
   queueDelete,
+  queueSettings,
   queueUpsert,
   readCachedSnapshot,
   writeCachedSnapshot
@@ -18,6 +19,7 @@ export const syncState = writable<SyncState>('idle');
 export const pendingCount = writable(0);
 export const syncError = writable<string | null>(null);
 export const serviceAvailable = writable(true);
+export const stateReady = writable(false);
 
 let initialized = false;
 let syncPromise: Promise<void> | null = null;
@@ -37,6 +39,7 @@ export async function initializeState(serverSnapshot: AppSnapshot, backendAvaila
   const cached = await readCachedSnapshot();
   snapshot.set(cached ?? serverSnapshot);
   if (!cached && backendAvailable) await writeCachedSnapshot(serverSnapshot);
+  stateReady.set(true);
   await updatePendingCount();
   window.addEventListener('online', () => void syncNow());
   document.addEventListener('visibilitychange', () => {
@@ -55,6 +58,8 @@ async function updatePendingCount(): Promise<void> {
 }
 
 export async function saveLocalTransaction(input: TransactionInput, receipt?: Blob): Promise<void> {
+  if (!get(snapshot)) throw new Error('Application data is not ready.');
+  const pendingReceiptId = await queueUpsert(input, receipt);
   const current = get(snapshot);
   if (!current) throw new Error('Application data is not ready.');
   const existing = current.transactions.find((transaction) => transaction.id === input.id);
@@ -70,12 +75,39 @@ export async function saveLocalTransaction(input: TransactionInput, receipt?: Bl
     ...current,
     transactions: [transaction, ...current.transactions.filter((item) => item.id !== input.id)]
   };
-  const pendingReceiptId = await queueUpsert(input, receipt);
   transaction.receiptId ??= pendingReceiptId ?? null;
   await replaceSnapshot(next);
   await updatePendingCount();
   if (navigator.storage?.persist) void navigator.storage.persist();
-  void syncNow();
+  await syncItem(input.id);
+}
+
+export async function saveLocalSettings(input: SettingsInput): Promise<void> {
+  if (!get(snapshot)) throw new Error('Application data is not ready.');
+  await queueSettings(input);
+  const current = get(snapshot);
+  if (!current) throw new Error('Application data is not ready.');
+  const legs = new Map(input.legs.map((leg) => [leg.id, leg]));
+  await replaceSnapshot({
+    ...current,
+    trip: { ...current.trip, overallBudgetYen: input.overallBudgetYen },
+    currentLegId: input.currentLegId,
+    legs: current.legs.map((leg) => {
+      const update = legs.get(leg.id);
+      return update ? { ...leg, ...update } : leg;
+    })
+  });
+  await updatePendingCount();
+  await syncItem('settings');
+}
+
+async function syncItem(id: string): Promise<void> {
+  if (!navigator.onLine) return;
+  await syncNow();
+  if ((await getOutbox()).some((item) => item.id === id)) {
+    const detail = get(syncError);
+    throw new Error(`Saved on this device, but server synchronization failed.${detail ? ` ${detail}` : ''}`);
+  }
 }
 
 export async function deleteLocalTransaction(id: string): Promise<void> {
@@ -88,12 +120,27 @@ export async function deleteLocalTransaction(id: string): Promise<void> {
   void syncNow();
 }
 
+export async function discardFailedChanges(): Promise<void> {
+  const failed = (await getOutbox()).filter((item) => item.attempts > 0);
+  for (const item of failed) await completeOutbox(item);
+  syncError.set(null);
+  await updatePendingCount();
+  await syncNow();
+}
+
 async function request(item: Awaited<ReturnType<typeof getOutbox>>[number]): Promise<void> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 30_000);
   try {
     let response: Response;
-    if (item.kind === 'delete') {
+    if (item.kind === 'settings' && item.settings) {
+      response = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(item.settings),
+        signal: controller.signal
+      });
+    } else if (item.kind === 'delete') {
       response = await fetch(`/api/transactions/${item.id}`, {
         method: 'DELETE',
         headers: { 'x-hakui-revision': String(item.revision ?? 0) },
@@ -117,13 +164,25 @@ async function request(item: Awaited<ReturnType<typeof getOutbox>>[number]): Pro
     if (!response.ok) {
       if (response.status >= 500) serviceAvailable.set(false);
       throw new SyncRequestError(
-        (await response.text()) || `Sync failed with status ${response.status}.`,
+        (await responseMessage(response)) || `Sync failed with status ${response.status}.`,
         response.status >= 500 || response.status === 408 || response.status === 429
       );
     }
   } finally {
     window.clearTimeout(timeout);
   }
+}
+
+async function responseMessage(response: Response): Promise<string> {
+  const text = await response.text();
+  try {
+    const parsed = JSON.parse(text) as { message?: unknown; detail?: unknown };
+    if (typeof parsed.message === 'string') return parsed.message;
+    if (typeof parsed.detail === 'string') return parsed.detail;
+  } catch {
+    // Plain-text errors are returned as-is.
+  }
+  return text;
 }
 
 export function syncNow(): Promise<void> {
@@ -150,23 +209,23 @@ export function syncNow(): Promise<void> {
           throw cause;
         }
       }
+      const remaining = await getOutbox();
       await updatePendingCount();
-      if ((await getOutbox()).length === 0) {
-        const response = await fetch('/api/snapshot', { cache: 'no-store' });
-        if (!response.ok) {
-          if (response.status >= 500) serviceAvailable.set(false);
-          throw new Error('Could not refresh server data.');
-        }
-        const serverSnapshot = await response.json();
-        if ((await getOutbox()).length === 0) await replaceSnapshot(serverSnapshot);
-        serviceAvailable.set(true);
-        if (serverSnapshot.transactions.some((transaction: Transaction) => transaction.status === 'pending_ocr')) {
-          if (pollTimer !== null) window.clearTimeout(pollTimer);
-          pollTimer = window.setTimeout(() => {
-            pollTimer = null;
-            void syncNow();
-          }, 5_000);
-        }
+      const response = await fetch('/api/snapshot', { cache: 'no-store' });
+      if (!response.ok) {
+        if (response.status >= 500) serviceAvailable.set(false);
+        throw new Error('Could not refresh server data.');
+      }
+      const serverSnapshot: AppSnapshot = await response.json();
+      const mergedSnapshot = mergePendingChanges(serverSnapshot, remaining);
+      await replaceSnapshot(mergedSnapshot);
+      serviceAvailable.set(true);
+      if (serverSnapshot.transactions.some((transaction: Transaction) => transaction.status === 'pending_ocr')) {
+        if (pollTimer !== null) window.clearTimeout(pollTimer);
+        pollTimer = window.setTimeout(() => {
+          pollTimer = null;
+          void syncNow();
+        }, 5_000);
       }
       if (terminalError) throw terminalError;
       syncState.set('idle');
@@ -191,4 +250,31 @@ export function syncNow(): Promise<void> {
     }
   })();
   return syncPromise;
+}
+
+function mergePendingChanges(serverSnapshot: AppSnapshot, items: Awaited<ReturnType<typeof getOutbox>>): AppSnapshot {
+  const local = get(snapshot);
+  let merged = serverSnapshot;
+  for (const item of items) {
+    if (item.kind === 'settings' && item.settings) {
+      const legs = new Map(item.settings.legs.map((leg) => [leg.id, leg]));
+      merged = {
+        ...merged,
+        trip: { ...merged.trip, overallBudgetYen: item.settings.overallBudgetYen },
+        currentLegId: item.settings.currentLegId,
+        legs: merged.legs.map((leg) => ({ ...leg, ...(legs.get(leg.id) ?? {}) }))
+      };
+    } else if (item.kind === 'delete') {
+      merged = { ...merged, transactions: merged.transactions.filter((transaction) => transaction.id !== item.id) };
+    } else if (item.transaction) {
+      const optimistic = local?.transactions.find((transaction) => transaction.id === item.id);
+      if (optimistic) {
+        merged = {
+          ...merged,
+          transactions: [optimistic, ...merged.transactions.filter((transaction) => transaction.id !== item.id)]
+        };
+      }
+    }
+  }
+  return merged;
 }

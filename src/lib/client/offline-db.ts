@@ -1,11 +1,12 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { AppSnapshot, TransactionInput } from '$lib/types';
+import type { AppSnapshot, SettingsInput, TransactionInput } from '$lib/types';
 
 export interface OutboxItem {
   id: string;
   operationId: string;
-  kind: 'upsert' | 'delete';
+  kind: 'upsert' | 'delete' | 'settings';
   transaction?: TransactionInput;
+  settings?: SettingsInput;
   receiptId?: string;
   revision?: number;
   attempts: number;
@@ -53,8 +54,7 @@ export async function queueUpsert(input: TransactionInput, receipt?: Blob): Prom
   const db = await getDatabase();
   const transaction = db.transaction(['outbox', 'receipts'], 'readwrite');
   const existing = await transaction.objectStore('outbox').get(input.id);
-  const receiptId = receipt ? crypto.randomUUID() : existing?.receiptId;
-  if (receipt && existing?.receiptId) await transaction.objectStore('receipts').delete(existing.receiptId);
+  const receiptId = existing?.receiptId ?? (receipt ? crypto.randomUUID() : undefined);
   if (receipt && receiptId) await transaction.objectStore('receipts').put(receipt, receiptId);
   await transaction.objectStore('outbox').put(
     {
@@ -82,6 +82,17 @@ export async function queueDelete(id: string, revision: number): Promise<void> {
     id
   );
   await transaction.done;
+}
+
+export async function queueSettings(settings: SettingsInput): Promise<void> {
+  await (await getDatabase()).put('outbox', {
+    id: 'settings',
+    operationId: crypto.randomUUID(),
+    kind: 'settings',
+    settings,
+    attempts: 0,
+    updatedAt: new Date().toISOString()
+  }, 'settings');
 }
 
 export async function getOutbox(): Promise<OutboxItem[]> {

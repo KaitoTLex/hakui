@@ -2,13 +2,14 @@
   import { onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
-  import { snapshot, saveLocalTransaction } from '$lib/client/state';
+  import { snapshot, saveLocalTransaction, stateReady } from '$lib/client/state';
   import { compressReceipt } from '$lib/client/image';
+  import { getReceipt as getLocalReceipt } from '$lib/client/offline-db';
   import type { PaymentMethod, PurchaseTiming } from '$lib/types';
 
   export let data;
 
-  let initializedFor = '';
+  let initializedFor = '\0';
   let mode: 'manual' | 'scan' = $page.url.searchParams.get('mode') === 'manual' ? 'manual' : 'scan';
   let id: string = crypto.randomUUID();
   let merchant = '';
@@ -24,6 +25,7 @@
   let saving = false;
   let error = '';
   let loadedReceipt = '';
+  let storedPreview = '';
   let receiptDetails: { ocrState: string; confidence: number | null; processingError: string | null; extraction: { totalSourceLine?: string } | null } | null = null;
 
   $: current = $snapshot ?? data.snapshot;
@@ -33,7 +35,7 @@
     loadedReceipt = editing.receiptId;
     void loadReceipt(editing.receiptId);
   }
-  $: if (requestedId !== initializedFor) {
+  $: if ($stateReady && requestedId !== initializedFor) {
     initializedFor = requestedId;
     if (editing) {
       id = editing.id; merchant = editing.merchant; amountYen = editing.amountYen;
@@ -59,11 +61,17 @@
   }
 
   async function loadReceipt(receiptId: string): Promise<void> {
+    const localReceipt = await getLocalReceipt(receiptId);
+    if (localReceipt) {
+      if (storedPreview) URL.revokeObjectURL(storedPreview);
+      storedPreview = URL.createObjectURL(localReceipt);
+      receiptDetails = { ocrState: 'queued', confidence: null, processingError: null, extraction: null };
+    }
     try {
       const response = await fetch(`/api/receipts/${receiptId}`);
       if (response.ok) receiptDetails = await response.json();
     } catch {
-      receiptDetails = null;
+      if (!localReceipt) receiptDetails = null;
     }
   }
 
@@ -96,7 +104,10 @@
     }
   }
 
-  onDestroy(() => { if (preview) URL.revokeObjectURL(preview); });
+  onDestroy(() => {
+    if (preview) URL.revokeObjectURL(preview);
+    if (storedPreview) URL.revokeObjectURL(storedPreview);
+  });
 </script>
 
 <div class="page capture-page">
@@ -109,7 +120,7 @@
   <form class="entry card" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
     {#if editing?.receiptId}
       <section class="ocr-review">
-        <img src={`/api/receipts/${editing.receiptId}/image`} alt="Scanned receipt" />
+        <img src={storedPreview || `/api/receipts/${editing.receiptId}/image`} alt="Scanned receipt" />
         <div>
           <span class="eyebrow">OCR review</span>
           <h2>{receiptDetails?.ocrState === 'failed' ? 'Automatic reading failed' : 'Confirm the extracted details'}</h2>

@@ -1,5 +1,11 @@
 export async function compressReceipt(file: File, maxEdge = 1600, quality = 0.78): Promise<Blob> {
-  const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  } catch {
+    if (file.size <= 12_000_000 && /^image\/(heic|heif)$/i.test(file.type)) return file;
+    throw new Error('This browser cannot read that image. Try JPEG, PNG, WebP, HEIC, or HEIF under 12 MB.');
+  }
   const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
   const width = Math.max(1, Math.round(bitmap.width * scale));
   const height = Math.max(1, Math.round(bitmap.height * scale));

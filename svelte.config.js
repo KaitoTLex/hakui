@@ -4,7 +4,10 @@ import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 const config = {
   preprocess: vitePreprocess(),
   kit: {
-    adapter: adapter({ precompress: true })
+    adapter: adapter({ precompress: true }),
+    csrf: {
+      trustedOrigins: ['https://hakui.kaitotlex.systems']
+    }
   }
 };
 

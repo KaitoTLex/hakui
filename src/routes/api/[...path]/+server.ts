@@ -6,6 +6,12 @@ const proxy: RequestHandler = async ({ params, request }) => {
   headers.delete('connection');
   headers.delete('content-length');
   headers.delete('host');
+  headers.delete('keep-alive');
+  headers.delete('proxy-connection');
+  headers.delete('te');
+  headers.delete('trailer');
+  headers.delete('transfer-encoding');
+  headers.delete('upgrade');
 
   const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
   try {

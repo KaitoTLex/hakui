@@ -93,3 +93,14 @@ export interface TransactionInput {
   status: TransactionStatus;
   revision: number;
 }
+
+export interface SettingsInput {
+  overallBudgetYen: number;
+  currentLegId: string | null;
+  legs: Array<{
+    id: string;
+    budgetYen: number;
+    startsOn: string | null;
+    endsOn: string | null;
+  }>;
+}

@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
 import type { TransactionInput } from '$lib/types';
-import { completeOutbox, getOutbox, getReceipt, markAttempt, queueDelete, queueUpsert } from './offline-db';
+import { completeOutbox, getOutbox, getReceipt, markAttempt, queueDelete, queueSettings, queueUpsert } from './offline-db';
 
 function input(revision: number, merchant: string): TransactionInput {
   return {
@@ -36,11 +36,25 @@ describe('offline outbox safety', () => {
     expect((await getOutbox())[0].operationId).toBe(second.operationId);
     expect(await getReceipt(receiptId!)).toBeTruthy();
 
+    const retriedId = await queueUpsert(input(2, 'Corrected merchant'), new Blob(['replacement'], { type: 'image/jpeg' }));
+    expect(retriedId).toBe(receiptId);
+
     await markAttempt(first);
     expect((await getOutbox())[0].attempts).toBe(0);
 
     await queueDelete(second.id, 2);
     expect((await getOutbox())[0].kind).toBe('delete');
     expect(await getReceipt(receiptId!)).toBeUndefined();
+  });
+
+  it('persists settings in the outbox for offline synchronization', async () => {
+    await queueSettings({
+      overallBudgetYen: 500_000,
+      currentLegId: null,
+      legs: []
+    });
+    const settings = (await getOutbox()).find((item) => item.kind === 'settings');
+    expect(settings?.settings?.overallBudgetYen).toBe(500_000);
+    expect(settings?.attempts).toBe(0);
   });
 });

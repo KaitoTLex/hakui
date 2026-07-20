@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
-  import { initializeState, pendingCount, serviceAvailable, snapshot, syncState, syncNow } from '$lib/client/state';
+  import { discardFailedChanges, initializeState, pendingCount, serviceAvailable, snapshot, syncError, syncState, syncNow } from '$lib/client/state';
   import '../app.css';
 
   export let data;
@@ -51,6 +51,8 @@
     </header>
     {#if mounted ? !$serviceAvailable : !data.backendAvailable}
       <div class="service-warning" role="status">Server data is temporarily unavailable. Cached data and new changes remain on this device and will sync automatically.</div>
+    {:else if $syncError}
+      <div class="service-warning" role="alert">A saved change still needs attention: {$syncError} <button type="button" onclick={() => syncNow()}>Retry</button><button type="button" onclick={() => discardFailedChanges()}>Discard failed change</button></div>
     {/if}
     <slot />
   </main>

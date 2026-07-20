@@ -11,13 +11,14 @@ class DatabaseTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         root = Path(self.temporary.name)
-        self.database = Database(Config(
+        self.config = Config(
             server=ServerConfig("127.0.0.1", 3004, "http://127.0.0.1:3004"),
             backend=BackendConfig("127.0.0.1", 3005),
             storage=StorageConfig(root / "hakui.sqlite", root / "backups", root / "missing.csv"),
             receipts=ReceiptConfig(12_000_000, 25_000_000),
             ocr=OcrConfig(("eng",), 30, 1, False),
-        ))
+        )
+        self.database = Database(self.config)
 
     def tearDown(self) -> None:
         self.database.close()
@@ -80,7 +81,7 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(transaction["status"], "confirmed")
         self.assertEqual(transaction["revision"], 2)
 
-    def test_ocr_completion_advances_server_revision(self) -> None:
+    def test_ocr_completion_preserves_client_revision(self) -> None:
         transaction_id = str(uuid.uuid4())
         receipt_id = str(uuid.uuid4())
         transaction = {
@@ -97,6 +98,32 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(completed["amountYen"], 500)
         self.assertEqual(completed["status"], "needs_review")
         self.assertEqual(completed["revision"], 1)
+
+    def test_settings_and_receipt_image_survive_database_reopen(self) -> None:
+        snapshot = self.database.snapshot()
+        transaction_id = str(uuid.uuid4())
+        receipt_id = str(uuid.uuid4())
+        self.database.update_settings({
+            "overallBudgetYen": 750_000,
+            "currentLegId": snapshot["legs"][1]["id"],
+            "legs": [{
+                "id": leg["id"], "budgetYen": (index + 1) * 100_000,
+                "startsOn": None, "endsOn": None,
+            } for index, leg in enumerate(snapshot["legs"])],
+        })
+        self.database.create_receipt_upload(receipt_id, {
+            "id": transaction_id, "legId": None, "categoryId": None, "merchant": "Receipt scan", "amountYen": 0,
+            "transactionDate": None, "paymentMethod": "unknown", "purchaseTiming": "during_trip", "notes": "",
+            "source": "scan", "status": "pending_ocr", "revision": 1,
+        }, b"persisted image", "image/jpeg")
+        self.database.close()
+        self.database = Database(self.config)
+
+        reopened = self.database.snapshot()
+        receipt = self.database.get_receipt(receipt_id, include_image=True)
+        self.assertEqual(reopened["trip"]["overallBudgetYen"], 750_000)
+        self.assertEqual(reopened["currentLegId"], snapshot["legs"][1]["id"])
+        self.assertEqual(receipt["image"], b"persisted image")
 
 
 if __name__ == "__main__":
